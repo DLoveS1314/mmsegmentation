@@ -118,3 +118,8 @@ mmseg/.mim
 
 # Pytorch
 *.pth
+neitable/
+
+index_table/equ_0.5.csv
+index_table/FULLER4D_5_0.0_90.0.csv
+index_table/FULLER4D_7_0.0_90.0.csv
