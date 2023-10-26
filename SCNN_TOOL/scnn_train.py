@@ -2,6 +2,8 @@
 import argparse
 import logging
 import os
+# os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+os.environ['TORCH_CUDNN_V8_API_ENABLED'] = '1'
 import os.path as osp
 import os,sys
 # os.chdir(os.getcwd())
@@ -14,6 +16,7 @@ from mmengine.runner import Runner
 
 from mmseg.registry import RUNNERS
 
+from mmseg.utils import register_all_modules
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a segmentor')
@@ -56,6 +59,7 @@ def parse_args():
 
 
 def main():
+    register_all_modules() 
     args = parse_args()
 
     # load config
@@ -95,11 +99,12 @@ def main():
     if 'runner_type' not in cfg:
         # build the default runner
         runner = Runner.from_cfg(cfg)
+        
     else:
         # build customized runner from the registry
         # if 'runner_type' is set in the cfg
         runner = RUNNERS.build(cfg)
-
+    # print(runner.model)
     # start training
     runner.train()
 

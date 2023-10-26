@@ -8,17 +8,18 @@ dataset_type = 'ENS10Dataset'
 
 test_pipeline = [# dict(type='RandomCrop', crop_size=224, padding=0),
     # dict(type='RandomFlip', prob=0.5, direction='horizontal'),
-            dict(type= 'PackIcoInputs')]
+            dict(type= 'PackIcoInputs',meta_keys=('out_mean','out_std'))]
 
 train_pipeline=[       
-        dict(type= 'PackIcoInputs')
+        dict(type= 'PackIcoInputs',meta_keys=('out_mean','out_std'))
  ]
  
-data_root = '/home/dls/data/openmmlab/letter2/mmsegmentation/SCNN_TOOL/data/t2m/ann'
-train_batch = 118
-test_batch = 256
-num_workers =8
-data_root = ''
+train_batch = 16
+test_batch = 32
+num_workers = 16
+data_root = ''#需要继承使用
+pin_memory=True
+persistent_workers=True
 train_dataloader =  dict(
         dataset=dict(
         type=dataset_type,
@@ -30,7 +31,9 @@ train_dataloader =  dict(
         # collate_fn=dict(type='default_collate'),
         sampler=dict(type='DefaultSampler', shuffle=True),
         batch_size= train_batch,
-        num_workers=num_workers
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers
     )
 val_dataloader =  dict(
         dataset=dict(
@@ -42,7 +45,9 @@ val_dataloader =  dict(
         # collate_fn=dict(type='default_collate'),
         sampler=dict(type='DefaultSampler', shuffle=False),
         batch_size=test_batch,
-        num_workers=num_workers
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers
     )
 test_dataloader =  dict(
         dataset=dict(
@@ -52,15 +57,13 @@ test_dataloader =  dict(
         pipeline=test_pipeline,
          test_mode=True,
         ),
-        collate_fn=dict(type='default_collate'),
+        # collate_fn=dict(type='default_collate'),
         sampler=dict(type='DefaultSampler', shuffle=False),
         batch_size=test_batch,
-        num_workers=num_workers
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers
     )
 # val_evaluator = dict(type='Accuracy', topk=(1,5))
-test_evaluator = [dict(type='Accuracy'),dict(type='SingleLabelMetric')]
+test_evaluator = [dict(type='CRPS_metric') ]
 val_evaluator =test_evaluator
-# train, val, test setting
-train_cfg = dict(by_epoch=True, max_epochs=300, val_interval=3)
-val_cfg = dict()
-test_cfg = dict() ##可以没有 但是不能为空！！！

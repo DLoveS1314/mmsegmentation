@@ -21,6 +21,7 @@ import sys
 import numpy as np
 import pandas as pd
 import torch
+from scipy.spatial import cKDTree
 
 sys.path.append(os.getcwd())
  
@@ -87,6 +88,19 @@ def ll2xyz(lon,lat, israd ):
     y_ = np.cos(lat) * np.sin(lon)
     z_ = np.sin(lat)
     return x_,y_,z_
+
+def ll2xyz_torch(lon,lat, israd ):
+    # 输入是弧度制
+    lon = torch.as_tensor(lon)
+    lat = torch.as_tensor(lat)
+    if not israd:
+        lon = torch.deg2rad(lon)
+        lat = torch.deg2rad(lat)
+    x_ = torch.cos(lat) * torch.cos(lon)
+    y_ = torch.cos(lat) * torch.sin(lon)
+    z_ = torch.sin(lat)
+    coords = torch.stack([x_,y_,z_],dim=1)
+    return coords
 def xyz2ll(X,Y,Z):
     lonR = np.arctan2(Y,X) #  经度[-180,180]
     xy_r = np.sqrt(X^2+Y^2) 
@@ -109,7 +123,7 @@ def create_dggrid_index_table(dggtype,res,dggs_vert0_lon= "0.0",dggs_vert0_lat= 
         dggrid_data['lat'] = gdf['point'].y
         print(f'create_dggrid_index_table is saving {outpath}')
         dggrid_data.to_csv(path_or_buf=outpath,index=False)
-    print(f'create_dggrid_index_table:{dggrid_data.shape}')
+    # print(f'create_dggrid_index_table:{dggrid_data.shape}')
     
     return dggrid_data
 def create_erp_index_table(delta,path=os.path.join(os.getcwd(),'index_table')):
@@ -137,7 +151,7 @@ def create_erp_index_table(delta,path=os.path.join(os.getcwd(),'index_table')):
         index_table['lon'] = lon.flatten()
         index_table['lat'] = lat.flatten()
         index_table.to_csv(path_or_buf=os.path.join(path,f'equ_{delta}.csv'),index=False)
-    print(f'create_index_table:{index_table.shape}')
+    # print(f'create_index_table:{index_table.shape}')
     return index_table
 def cal_euclidean_distance(point, matrix):
     """ 用于apply的自定义函数 计算一个点 point 到矩阵 matrix 中每个点的欧氏距离
@@ -278,7 +292,7 @@ def get_ico2erp_table(delta,rootpath,dggs_type, dggrid_level,knei):
     if not os.path.isfile(save_path):
         # 创建经纬度格网
         erp_index=create_erp_index_table(delta,rootpath).sort_values(by='codes',ascending=True)
-        #创建二十面体格网
+        #创建二十面体格网 
         dggrid_index= create_dggrid_index_table( dggs_type, res = dggrid_level , path= rootpath ).sort_values(by='seqnum',ascending=True)
 
         #  根据经纬度生成xyz
@@ -304,8 +318,44 @@ def get_ico2erp_table(delta,rootpath,dggs_type, dggrid_level,knei):
     # equindex.to_csv(path_or_buf=os.path.join(outpath,f'{equ_basename}_k{knei}l{dggrid_level}_{dggrid_basename}.csv'),index=False)
     # equindex.to_pickle(path=os.path.join(outpath,f'{equ_basename}_k{knei}l{dggrid_level}_{dggrid_basename}.pkl') )
 
+def get_ico2erp_knn(delta,rootpath,dggs_type, dggrid_level,knei):
+    # 根据二十面体格网点 构建Knn图 然后根据Knn图计算每个经纬度点的最近的k个格网点
+    # 1、创建经纬度格网 一定要进行 codes 排序 从小到大  knn最终输出的索引就是这个
+    erp_index=create_erp_index_table(delta,rootpath).sort_values(by='codes',ascending=True)
+    #2 、创建二十面体格网  一定要进行 seqnum 排序 从小到大
+    dggrid_index= create_dggrid_index_table( dggs_type, res = dggrid_level , path= rootpath ).sort_values(by='seqnum',ascending=True)
+    # 3、利用scipy的cKDTree根据各网点生成knn图
+    dgggridlatlon =  dggrid_index[['lon','lat']].values
+    dggpoints = ll2xyz_torch(dgggridlatlon[:,0],dgggridlatlon[:,1],israd=False)
+    # dggpoints = torch.stack([torch.as_tensor(dggpoints[0]),torch.as_tensor(dggpoints[1]),torch.as_tensor(dggpoints[1])],dim=1)
+    
+    dggknn = cKDTree(dggpoints)
+    # 4、根据knn图计算每个经纬度点的最近的k个格网点
+    erplatlon = erp_index[['lon','lat']].values
+    erppoints = ll2xyz_torch(erplatlon[:,0],erplatlon[:,1],israd=False)
+    _ , indices = dggknn.query(erppoints,k=knei) #indices shape (n,k) n是erp格网点数 k是最近的k个格网点
+    
+    return indices
 
- 
+def get_erp2ico_knn(delta,rootpath,dggs_type, dggrid_level,knei):
+    # 根据经纬度格网点 构建Knn图 然后根据Knn图计算每个二十面体格网点的最近的k个经纬度点
+    # 1、创建经纬度格网 一定要进行 codes 排序 从小到大  knn最终输出的索引就是这个
+    erp_index=create_erp_index_table(delta,rootpath).sort_values(by='codes',ascending=True)
+    #2 、创建二十面体格网  一定要进行 seqnum 排序 从小到大
+    dggrid_index= create_dggrid_index_table( dggs_type, res = dggrid_level , path= rootpath ).sort_values(by='seqnum',ascending=True)
+    # 3、利用scipy的cKDTree根据各网点生成knn图
+    erplatlon = erp_index[['lon','lat']].values
+    erppoints = ll2xyz_torch(erplatlon[:,0],erplatlon[:,1],israd=False)
+    # erppoints = torch.stack([torch.as_tensor(erppoints[0]),torch.as_tensor(erppoints[1]),torch.as_tensor(erppoints[1])],dim=1)
+    erpknn = cKDTree(erppoints)
+    # 4、根据knn图计算每个格网点最近的k个经纬度点
+    dgggridlatlon =  dggrid_index[['lon','lat']].values
+    dggpoints = ll2xyz_torch(dgggridlatlon[:,0],dgggridlatlon[:,1],israd=False)
+    _ , indices = erpknn.query(dggpoints,k=knei) #indices shape (n,k) n是erp格网点数 k是最近的k个格网点
+    
+    return indices
+    
+    
 def test_getequcode():
     halflonnum  = 20
     halflatnum  = 30 

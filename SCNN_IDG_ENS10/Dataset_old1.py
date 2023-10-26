@@ -41,43 +41,43 @@ class ENS10GridDataset(Dataset):
             time_range = slice("2016-01-01", "2017-12-31")
             self.test_mode = True
         if target_var in ["t850", "z500"]:#预测的是t850或者z500 使用pl 变量
-            # ds_mean = xr.open_dataset(f"{data_path}/ENS10_pl_mean{suffix}.nc", chunks={"time": 10}).sel(time=time_range)
-            # ds_std = xr.open_dataset(f"{data_path}/ENS10_pl_std{suffix}.nc", chunks={"time": 10}).sel(time=time_range)
-            # self.ds_scale_mean = xr.open_dataset(f"{data_path}/ENS10_pl_mean.nc", chunks={"time": 1},
-            #                                      engine="h5netcdf").sel(time=time_range)
-            # self.ds_scale_std = xr.open_dataset(f"{data_path}/ENS10_pl_std.nc", chunks={"time": 1},
-                                                # engine="h5netcdf").sel(time=time_range)
+            ds_mean = xr.open_dataset(f"{data_path}/ENS10_pl_mean{suffix}.nc", chunks={"time": 10}).sel(time=time_range)
+            ds_std = xr.open_dataset(f"{data_path}/ENS10_pl_std{suffix}.nc", chunks={"time": 10}).sel(time=time_range)
+            self.ds_scale_mean = xr.open_dataset(f"{data_path}/ENS10_pl_mean.nc", chunks={"time": 1},
+                                                  ).sel(time=time_range)
+            self.ds_scale_std = xr.open_dataset(f"{data_path}/ENS10_pl_std.nc", chunks={"time": 1},
+                                                 ).sel(time=time_range)
             self.variables = ["Z", "T", "Q", "W", "D", "U", "V"]
             if target_var == "t850":
-                # self.ds_mean = ds_mean.sel(plev=85000)
-                # self.ds_std = ds_std.sel(plev=85000)
-                self.ds_era5 = xr.open_dataset(f"{data_path}/ERA5_t850.nc", chunks={"time": 10}).sel(
-                    time=time_range).isel(plev=0).T
-                # self.ds_scale_mean = self.ds_scale_mean.sel(plev=85000).T
-                # self.ds_scale_std = self.ds_scale_std.sel(plev=85000).T
+                self.ds_mean = ds_mean.sel(plev=85000)
+                self.ds_std = ds_std.sel(plev=85000)
+                # self.ds_era5 = xr.open_dataset(f"{data_path}/ERA5_t850.nc", chunks={"time": 10}).sel(
+                #     time=time_range).isel(plev=0).T
+                self.ds_scale_mean = self.ds_scale_mean.sel(plev=85000).T
+                self.ds_scale_std = self.ds_scale_std.sel(plev=85000).T
             elif target_var == "z500":
                 # self.ds_mean = ds_mean.sel(plev=50000)  
                 # self.ds_std = ds_std.sel(plev=50000)
-                self.ds_era5 = xr.open_dataset(f"{data_path}/ERA5_z500.nc", chunks={"time": 10}).sel(
-                    time=time_range).isel(plev=0).Z
-                # self.ds_scale_mean = self.ds_scale_mean.sel(plev=50000).Z
-                # self.ds_scale_std = self.ds_scale_std.sel(plev=50000).Z
+                # self.ds_era5 = xr.open_dataset(f"{data_path}/ERA5_z500.nc", chunks={"time": 10}).sel(
+                #     time=time_range).isel(plev=0).Z
+                self.ds_scale_mean = self.ds_scale_mean.sel(plev=50000).Z
+                self.ds_scale_std = self.ds_scale_std.sel(plev=50000).Z
         elif target_var in ["t2m"]: #预测的是t2m 使用sfc 变量
             # self.ds_mean = xr.open_dataset(f"{data_path}/ENS10_sfc_mean{suffix}.nc", chunks={"time": 10}).sel(
             #     time=time_range)
             # self.ds_std = xr.open_dataset(f"{data_path}/ENS10_sfc_std{suffix}.nc", chunks={"time": 10}).sel(
             #     time=time_range)
-            self.ds_era5 = xr.open_dataset(f"{data_path}/ERA5_sfc_t2m.nc", chunks={"time": 10}).sel(
-                time=time_range).T2M
+            # self.ds_era5 = xr.open_dataset(f"{data_path}/ERA5_sfc_t2m.nc", chunks={"time": 10}).sel(
+            #     time=time_range).T2M
             # self.ds_scale_mean = xr.open_dataset(f"{data_path}/ENS10_sfc_mean.nc", chunks={"time": 1},
-            #                                      engine="h5netcdf").sel(time=time_range).T2M
-            # self.ds_scale_mean = xr.open_dataset(f"{data_path}/ENS10_sfc_mean.nc", chunks={"time": 1}).sel(time=time_range).T2M
-            # # self.ds_scale_std = xr.open_dataset(f"{data_path}/ENS10_sfc_std.nc", chunks={"time": 1},
-            # #                                     engine="h5netcdf").sel(time=time_range).T2M
-            # self.ds_scale_std = xr.open_dataset(f"{data_path}/ENS10_sfc_std.nc", chunks={"time": 1}).sel(time=time_range).T2M
+            #                                       ).sel(time=time_range).T2M
+            self.ds_scale_mean = xr.open_dataset(f"{data_path}/ENS10_sfc_mean.nc", chunks={"time": 1}).sel(time=time_range).T2M
+            # self.ds_scale_std = xr.open_dataset(f"{data_path}/ENS10_sfc_std.nc", chunks={"time": 1},
+            #                                     engine="h5netcdf").sel(time=time_range).T2M
+            self.ds_scale_std = xr.open_dataset(f"{data_path}/ENS10_sfc_std.nc", chunks={"time": 1}).sel(time=time_range).T2M
             self.variables = ['SSTK', 'TCW', 'TCWV', 'CP', 'MSL', 'TCC', 'U10M', 'V10M', 'T2M', 'TP', 'SKT']
 
-        self.length = len(self.ds_era5)
+        self.length = len(self.ds_scale_mean)
         # 创建一个PackIcoInputs的实例
         self.pipeline = PackIcoInputs()
     def __len__(self):
@@ -101,6 +101,17 @@ class ENS10GridDataset(Dataset):
             results['time'] = self.ds_era5.time[idx].dt.strftime("%Y-%m-%d").item()
         # 不接受其它步骤的处理，只接受PackIcoInputs的处理
         return self.pipeline(results)
+    
+    def prepare_outvar_data(self, idx) -> Any:
+        # 只返回输出变量的mean std
+        results =dict()
+        mean =self.ds_scale_mean.isel(time=idx).compute().to_numpy()
+        std = self.ds_scale_std.isel(time=idx).compute().to_numpy()
+        results['scale_mean'] = mean
+        results['scale_std'] = std
+        if self.return_time:
+            results['time'] = self.ds_scale_std.time[idx].dt.strftime("%Y-%m-%d").item()
+        return results
     def prepare_data(self, idx) -> Any:
         """Get data processed by ``self.pipeline``.
 
@@ -145,7 +156,8 @@ class ENS10GridDataset(Dataset):
     def __getitem__(self, idx):
         # if self.test_mode:
             # data = self.prepare_data(idx)
-            data = self.perpare_target_only(idx)
+            # data = self.perpare_target_only(idx)
+            data =self.prepare_outvar_data(idx)
             # if data is None:
                 # raise Exception('Test time pipline should not get `None` '
                 #                 'data_sample')

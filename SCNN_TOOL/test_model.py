@@ -7,12 +7,14 @@ import os,sys
 import os.path as osp
 sys.path.append(os.getcwd())
 from torchsummary import summary
+from mmengine.logging import print_log
+
 import torchvision
 # from mmengine.config import Config, DictAction
 from mmengine.logging import print_log
 # from mmengine.runner import Runner
 # from mmengine import DefaultScope
-from mmseg.registry import RUNNERS,MODELS,DATASETS
+from mmseg.registry import RUNNERS,MODELS,DATASETS 
 from mmseg.utils import register_all_modules
 from SCNN_IDG_ENS10 import IcoPad
 from mmengine.runner import Runner
@@ -26,6 +28,8 @@ from SCNN_IDG_ENS10 import IcoDataPreProcessor
 from SCNN_IDG_ENS10 import IcoFCNHead
 from mmseg.structures import SegDataSample 
 from mmengine.structures import PixelData
+from mmseg.utils import register_all_modules
+from mmengine.evaluator import Evaluator
 
 # 注册所有模块 openmmlab系列 已经不再显式调用 这个了 而是继承在了mmengine中进行懒加载 
 # 只要在config中设置好 default_scope 为mmseg等 下游库  然后把函数卸载 mmseg对应的文件夹中（比如 model的backbone里）
@@ -148,26 +152,43 @@ def test_dataloader():
   
         pass
 def test_all():
-    
+    data_root = '/home/dls/data/openmmlab/letter2/mmsegmentation/SCNN_TOOL/data/t2m/ann'
+    train_pipeline=[       
+        dict(type= 'PackIcoInputs')
+    ]
     train_dataloader = dict(
-    batch_size=1,
+    batch_size=2,
     num_workers=1,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
-    dataset =  dict(type = 'ENS10GridDataset',
-                     data_path  = '/media/dls/WeatherData/ENS10/meanstd/',
-                     target_var = 't2m',
-                     return_time=True,
-                     dataset_type='train')
-    ) 
+    # dataset =  dict(type = 'ENS10Dataset',
+    #                  data_path  = '/media/dls/WeatherData/ENS10/meanstd/',
+    #                  target_var = 't2m',
+    #                  return_time=True,
+    #                  dataset_type='train')
+    # ) 
+    dataset=dict(
+        type=ENS10Dataset,
+        data_root=data_root,
+        ann_file='test.json',
+        pipeline=train_pipeline,
+        test_mode=False
+        ))
+    mean   = '/media/dls/WeatherData/ENS10/normalized/ENS10_sfc_mean_mean.npy'
+    std    = '/media/dls/WeatherData/ENS10/normalized/ENS10_sfc_mean_std.npy'
+    std_mean = '/media/dls/WeatherData/ENS10/normalized/ENS10_sfc_std_mean.npy'
+    std_std = '/media/dls/WeatherData/ENS10/normalized/ENS10_sfc_std_std.npy'
     data_preprocessor = dict(
-    type='IcoDataPreProcessor',
-    pad_val=0,
-    seg_pad_val=0)
+        type='IcoDataPreProcessor' ,
+        mean=mean,
+        std=std,
+        std_mean=std_mean,
+        std_std=std_std
+    )
     
-    data_path = '/media/dls/WeatherData/ENS10/meanstd/'
-    target_var= 't2m'
-    batch_size = 1
+    # data_path = '/media/dls/WeatherData/ENS10/meanstd/'
+    # target_var= 't2m'
+    # batch_size = 1
     # trainloader = DataLoader(ENS10GridDataset(data_path= data_path,
                                                 #   target_var=  target_var,
                                                 #   dataset_type='train'), batch_size, shuffle=True, num_workers=4, pin_memory=True)
@@ -182,60 +203,137 @@ def test_all():
     padding_mode= dict( type='IcoPad')
     strides=(1, 1, 1  )
     in_channels = 22
-    base_channels = 32
     norm_cfg=dict(type='BN') 
     act_cfg=dict(type='ReLU') 
     upsample_cfg=dict(type='IcoInterpConv') 
+    # erp2igd_dict = dict( kernel_size=(3,3),
+    # dggs_type = 'FULLER4D',
+    # dggrid_level = 3,
+    # grid_mode = 'bilinear',
+    # ) 
     
+    knnnei = 9 #需要继承 不然就报错
+    dggrid_level =7
+    
+    idg2erp_dict = dict(
+    kernel_size=knnnei , 
+    delta=0.5, #经纬度的间隔
+    rootpath='/home/dls/data/openmmlab/letter2/mmsegmentation/index_table',
+    dggrid_level=dggrid_level,p=0,dggird_type='FULLER4D',useAttention=True
+    ) 
+ 
+# 设置backbone
+    # idg2erp_dict=dict(
+    #             k_size=9,
+    #             delta=0.5,
+    #             rootpath=
+    #             '/home/dls/data/openmmlab/letter2/mmsegmentation/index_table',
+    #             dggrid_level=7,
+    #             p=0,
+    #             dggird_type='FULLER4D')
+    erp2igd_dict = dict( kernel_size=knnnei,
+                        delta=0.5, #经纬度的间隔
+                        rootpath='/home/dls/data/openmmlab/letter2/mmsegmentation/index_table',
+                        dggrid_level=dggrid_level,p=0,dggird_type='FULLER4D',useAttention=True
+                        ) 
+    
+    lam_wei = 0.2 #第一个loss的权重 ，另一个为 1-lam_wei
+    # loss_decode=[
+    #                             dict(type='SmoothL1Loss', lam_w=0.5),
+    #                             dict(type='CrpsGaussianLoss', lam_w=0.5),
+    #                         ],
+    loss_decode  = [ dict(type='MSE_VAR',lam_w= lam_wei),dict(type='CrpsGaussianLoss',lam_w= 1-lam_wei)]
     model_dict = dict(
-    type='EncoderDecoder',
-    data_preprocessor=data_preprocessor,
-    backbone=dict(
-            type='IcoUnet',
-            in_channels = in_channels,
-            base_channels = base_channels,
-            num_stages = num_stages,
-            strides = strides,
-            enc_num_convs = enc_num_convs,
-            dec_num_convs = dec_num_convs,
-            downsamples = downsamples,
-            enc_dilations = enc_dilations,
-            dec_dilations = dec_dilations,
-            padding_mode =padding_mode,
-            norm_cfg=norm_cfg,
-            act_cfg=act_cfg,
-            upsample_cfg=upsample_cfg
-        ),
-        decode_head=dict(
-            type='FCNHead' ,
-            in_channels=base_channels,
-            channels=base_channels,
-            num_classes = 1,
-        )
+        type='IcoEncoderDecoder',
+        data_preprocessor=data_preprocessor,
+        backbone=dict(
+                type='IcoUnet',
+                in_channels = in_channels,
+                base_channels = base_channels,
+                num_stages = num_stages,
+                strides = strides,
+                enc_num_convs = enc_num_convs,
+                dec_num_convs = dec_num_convs,
+                downsamples = downsamples,
+                enc_dilations = enc_dilations,
+                dec_dilations = dec_dilations,
+                padding_mode =padding_mode,
+                norm_cfg=norm_cfg,
+                act_cfg=act_cfg,
+                upsample_cfg=upsample_cfg,
+                erp2igd_dict =erp2igd_dict
+            ),
+            decode_head = dict(
+                            type='IcoFCNHead',
+                            in_channels=base_channels,
+                            channels=base_channels,
+                            num_classes=None,
+                            num_convs=1,
+                            concat_input=False,
+                            dropout_ratio=0,
+                            norm_cfg=dict(type='BN'),
+                            act_cfg=dict(type='Swish'),
+                            conv_cfg=dict(type='Conv2d'),
+                            separate=True,
+                            loss_decode=loss_decode,
+                            idg2erp_dict=idg2erp_dict,
+                            in_index=-1,
+                            ),
+                train_cfg=dict(),
+        test_cfg=dict(mode='whole')
     )
-    x = torch.randn(1*10,3,64,64)
+    # 测试指标 
+    test_evaluator =  dict(type='CRPS_metric')  
+    evaluator =Evaluator(test_evaluator)
+    x = torch.randn(1*10,180,360)
     # print(MODELS)
     model = MODELS.build(model_dict)
+    
+    print('test_all model ',model)
+    # print_log(f'load model from {model_dict}', logger='root')
+    # return 
     print('test_all model ',model.data_preprocessor)
-    model.cuda()
+    
     trainloader=Runner.build_dataloader(train_dataloader)
     print('test_all trainloader ',trainloader)
     for batch_idx, data_batch in enumerate(trainloader):
         # 把databatch转化为模型需要的格式 包含 inputs 和datasampler 同时把数据搬运到gpu上
+        # print('test_all in',data.keys())
+        # if isinstance(data, dict):
+        #     print('test_all in',data['inputs'].device )
+        #     results = model.extract_feat( data['inputs'] )
+        # elif isinstance(data, (list, tuple)):
+        #     results = model.extract_feat(*data )
+           
+        # else:
+        #     raise TypeError('Output of `data_preprocessor` should be '
+        #                     f'list, tuple or dict, but got {type(data)}')
+        # print('test_all in',data['inputs'].shape)
         data = model.data_preprocessor(data_batch, True)
-        print(data.keys())
-        if isinstance(data, dict):
-            print('test_all in',data['inputs'].device )
-            results = model.extract_feat( data['inputs'] )
-        elif isinstance(data, (list, tuple)):
-            results = model.extract_feat(*data )
-        else:
-            raise TypeError('Output of `data_preprocessor` should be '
-                            f'list, tuple or dict, but got {type(data)}')
-        for i in range(len(data['inputs'])):
-            print(f'test_all out {i}',results[i].shape )
+        results = model(**data, mode='loss')
+        # results = model(**data, mode='predict')
+        # results = model.train_step(data_batch)
+        outputs = model.test_step(data_batch)
+        evaluator.process(data_samples=outputs, data_batch=data_batch)
+        metrics = evaluator.evaluate(len(trainloader.dataset))
+        for key, val in metrics.items():
+            print(f'{key}: {val}')
+        # for i in range(len(data_batch['inputs'])):
+        #     print(f'test_all out {i}',outputs  )
         break
 
+
+def test_all_v1():
+    # 使用 runner那种加载 cofig 的方式进行参数赋值 让 这边的参数和运行的完全一致
+    def getrunner(file):
+        pass
+    pass
+
+def test_sattention():
+    from SCNN_IDG_ENS10.SphereConv2d import SpatialAttentionModule
+    x = torch.randn(1,3,64,64)
+    model = SpatialAttentionModule()
+    out = model(x)
 def test_decode_head():
     
     in_channels=32
@@ -349,7 +447,8 @@ if __name__ == '__main__':
 #     work_dir='./work_dir' )
 # runner.build_model(model_dict)
     # test_Dataset()
-    # test_all()
+    test_all()
+    # test_sattention()
     # cal_flops()
     # test_decode_head()
-    testdataset()
+    # testdataset()

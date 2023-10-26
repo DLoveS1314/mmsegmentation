@@ -6,16 +6,19 @@ import torch.nn as nn
 import torch.nn.functional as F
 from mmengine.logging import print_log
 from torch import Tensor
+from mmengine.structures import PixelData
 
+from mmseg.structures import SegDataSample
 from mmseg.registry import MODELS
 from mmseg.utils import (ConfigType, OptConfigType, OptMultiConfig,
                          OptSampleList, SampleList, add_prefix)
 # from .base import BaseSegmentor
 from mmseg.models.segmentors import BaseSegmentor
+from mmengine.config import ConfigDict
 
 # 预测与验证的程序 发生了变化 因此重写EncoderDecoder类
 @MODELS.register_module()
-class ICOEncoderDecoder(BaseSegmentor):
+class IcoEncoderDecoder(BaseSegmentor):
     """Encoder Decoder segmentors.
 
     EncoderDecoder typically consists of backbone, decode_head, auxiliary_head.
@@ -93,16 +96,20 @@ class ICOEncoderDecoder(BaseSegmentor):
         self._init_decode_head(decode_head)
         self._init_auxiliary_head(auxiliary_head)
 
-        self.train_cfg = train_cfg
-        self.test_cfg = test_cfg
+        # self.train_cfg = train_cfg
+        # self.test_cfg = test_cfg
+        
+        self.test_cfg = ConfigDict(test_cfg) 
+        self.train_cfg = ConfigDict(train_cfg)  
+         
 
         assert self.with_decode_head
 
     def _init_decode_head(self, decode_head: ConfigType) -> None:
         """Initialize ``decode_head``"""
         self.decode_head = MODELS.build(decode_head)
-        self.align_corners = self.decode_head.align_corners
-        self.num_classes = self.decode_head.num_classes
+        # self.align_corners = self.decode_head.align_corners
+        # self.num_classes = self.decode_head.num_classes
         self.out_channels = self.decode_head.out_channels
 
     def _init_auxiliary_head(self, auxiliary_head: ConfigType) -> None:
@@ -118,22 +125,12 @@ class ICOEncoderDecoder(BaseSegmentor):
     def extract_feat(self, inputs: Tensor) -> List[Tensor]:
         """Extract features from images."""
         x = self.backbone(inputs)
+        # print("extract_feat backbone output shape:",x[0].shape)
         if self.with_neck:
             x = self.neck(x)
         return x
 
-    def encode_decode(self, inputs: Tensor,
-                      batch_img_metas: List[dict]) -> Tensor:
-        """Encode images with backbone and decode into a semantic segmentation
-        map of the same size as input. 
-        test/val 运行的主体部分 与train的主要区别是 train 调用的事loss函数 而test调用的是 predict 函数
-        predict函数只输出最终的结果 而不计算loss
-        """
-        x = self.extract_feat(inputs)
-        seg_logits = self.decode_head.predict(x, batch_img_metas,
-                                              self.test_cfg)
 
-        return seg_logits
 
     def _decode_head_forward_train(self, inputs: List[Tensor],
                                    data_samples: SampleList) -> dict:
@@ -221,8 +218,9 @@ class ICOEncoderDecoder(BaseSegmentor):
                     padding_size=[0, 0, 0, 0])
             ] * inputs.shape[0]
 
-        seg_logits = self.inference(inputs, batch_img_metas)
-
+        seg_logits = self.inference(inputs, batch_img_metas) 
+        
+        #运行整个网络得到网络的最终输出 对于分割任务 得到的是未进行softmax的logits 对于回归任务 得到的是回归的结果,所以回归和分割的后处理模块是不一样的
         return self.postprocess_result(seg_logits, data_samples)
 
     def _forward(self,
@@ -241,7 +239,97 @@ class ICOEncoderDecoder(BaseSegmentor):
         """
         x = self.extract_feat(inputs)
         return self.decode_head.forward(x)
+    
+    def postprocess_result(self,
+                           seg_logits: Tensor,
+                           data_samples: OptSampleList = None) -> SampleList:
+        """ Convert results list to `SegDataSample`. 重载了父类成员函数 处理回归问题
+        Args:
+            seg_logits (Tensor): The segmentation results, seg_logits from
+                model of each input image.
+            data_samples (list[:obj:`SegDataSample`]): The seg data samples.
+                It usually includes information such as `metainfo` and
+                `gt_sem_seg`. Default to None.
+        Returns:
+            list[:obj:`SegDataSample`]: Segmentation results of the
+            input images. Each SegDataSample usually contain:
 
+            - ``pred_sem_seg``(PixelData): Prediction of semantic segmentation.
+            - ``seg_logits``(PixelData): Predicted logits of semantic
+                segmentation before normalization.
+        #运行整个网络得到网络的最终输出 对于分割任务 得到的是未进行softmax的logits 对于回归任务 得到的是回归的结果,所以回归和分割的后处理模块是不一样的
+                
+        """
+        batch_size, C, H, W = seg_logits.shape
+
+        if data_samples is None:
+            data_samples = [SegDataSample() for _ in range(batch_size)]
+            only_prediction = True
+        else:
+            only_prediction = False
+        for i in range(batch_size):
+            i_seg_logits = seg_logits[i].squeeze(0)  
+            data_samples[i].set_data({
+                # 'seg_logits':
+                # PixelData(**{'data': i_seg_logits}),
+                'pred_sem_seg':
+                PixelData(**{'data': i_seg_logits}) #回归问题 两个是相等的 
+            }) #这里的输出 最后回送到metric 的process 中去计算 字典的名字都是约定俗成好的 不能改变
+            # 暂且不需要
+            # if not only_prediction:
+            #     img_meta = data_samples[i].metainfo
+            #     # remove padding area
+            #     if 'img_padding_size' not in img_meta:
+            #         padding_size = img_meta.get('padding_size', [0] * 4)
+            #     else:
+            #         padding_size = img_meta['img_padding_size']
+            #     padding_left, padding_right, padding_top, padding_bottom =\
+            #         padding_size
+            #     # i_seg_logits shape is 1, C, H, W after remove padding
+            #     i_seg_logits = seg_logits[i:i + 1, :,
+            #                               padding_top:H - padding_bottom,
+            #                               padding_left:W - padding_right]
+
+            #     flip = img_meta.get('flip', None)
+            #     if flip:
+            #         flip_direction = img_meta.get('flip_direction', None)
+            #         assert flip_direction in ['horizontal', 'vertical']
+            #         if flip_direction == 'horizontal':
+            #             i_seg_logits = i_seg_logits.flip(dims=(3, ))
+            #         else:
+            #             i_seg_logits = i_seg_logits.flip(dims=(2, ))
+
+            #     # resize as original shape
+            #     # i_seg_logits = resize(
+            #     #     i_seg_logits,
+            #     #     size=img_meta['ori_shape'],
+            #     #     mode='bilinear',
+            #     #     align_corners=self.align_corners,
+            #     #     warning=False).squeeze(0)
+            # else:
+                # i_seg_logits = seg_logits[i].squeeze(0)
+            # 分割用的 这里不用
+            # if C > 1:
+            #     i_seg_pred = i_seg_logits.argmax(dim=0, keepdim=True)
+            # else:
+            #     i_seg_logits = i_seg_logits.sigmoid()
+            #     i_seg_pred = (i_seg_logits >
+            #                   self.decode_head.threshold).to(i_seg_logits)
+
+
+        return data_samples
+    def encode_decode(self, inputs: Tensor,
+                      batch_img_metas: List[dict]) -> Tensor:
+        """Encode images with backbone and decode into a semantic segmentation
+        map of the same size as input. 
+        test/val 运行的主体部分 与train的主要区别是 train 调用的事loss函数 而test调用的是 predict 函数
+        predict函数只输出最终的结果 而不计算loss
+        """
+        x = self.extract_feat(inputs)
+        seg_logits = self.decode_head.predict(x, batch_img_metas,
+                                              self.test_cfg)
+
+        return seg_logits
     def slide_inference(self, inputs: Tensor,
                         batch_img_metas: List[dict]) -> Tensor:
         """Inference by sliding-window with overlap.

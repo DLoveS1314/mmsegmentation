@@ -110,70 +110,41 @@ def ico_stack_batch(inputs: List[torch.Tensor],
 @MODELS.register_module()
 class IcoDataPreProcessor(BaseDataPreprocessor):
     """Image pre-processor for segmentation tasks.
-
-    Comparing with the :class:`mmengine.ImgDataPreprocessor`,
-
-    1. It won't do normalization if ``mean`` is not specified.
-    2. It does normalization and color space conversion after stacking batch.
-    3. It supports batch augmentations like mixup and cutmix.
-
-
-    It provides the data pre-processing as follows
-
-    - Collate and move data to the target device.
-    - Pad inputs to the input size with defined ``pad_val``, and pad seg map
-        with defined ``seg_pad_val``.
-    - Stack inputs to batch_inputs.
-    - Convert inputs from bgr to rgb if the shape of input is (3, H, W).
-    - Normalize image with defined std and mean.
-    - Do batch augmentations like Mixup and Cutmix during training.
-
-    Args:
-        mean (Sequence[Number], optional): The pixel mean of R, G, B channels.
-            Defaults to None.
-        std (Sequence[Number], optional): The pixel standard deviation of
-            R, G, B channels. Defaults to None.
-        size (tuple, optional): Fixed padding size.
-        size_divisor (int, optional): The divisor of padded size.
-        pad_val (float, optional): Padding value. Default: 0.
-        seg_pad_val (float, optional): Padding value of segmentation map.
-            Default: 255.
-        padding_mode (str): Type of padding. Default: constant.
-            - constant: pads with a constant value, this value is specified
-              with pad_val.
-        batch_augments (list[dict], optional): Batch-level augmentations
-        test_cfg (dict, optional): The padding size config in testing, if not
-            specify, will use `size` and `size_divisor` params as default.
-            Defaults to None, only supports keys `size` or `size_divisor`.
     """
 
     def __init__(
         self,
-        mean: Sequence[Number] = None,
-        std: Sequence[Number] = None,
-        size: Optional[tuple] = None,
-        size_divisor: Optional[int] = None,
-        pad_val: Number = 0,
-        seg_pad_val: Number = 255,
+        mean   = None,
+        std    = None,
+        std_mean =None,
+        std_std = None,
         batch_augments: Optional[List[dict]] = None,
         test_cfg: dict = None,
     ):
         super().__init__()
-        self.size = size
-        self.size_divisor = size_divisor
-        self.pad_val = pad_val
-        self.seg_pad_val = seg_pad_val
-
+        # self.size = size
+        # self.size_divisor = size_divisor
+        # self.pad_val = pad_val
+        # self.seg_pad_val = seg_pad_val
+        self.eps = 1e-8
         if mean is not None:
-            assert std is not None, 'To enable the normalization in ' \
+            assert std is not None and std_mean is not None and std_std is not None , 'To enable the normalization in ' \
                                     'preprocessing, please specify both ' \
                                     '`mean` and `std`.'
             # Enable the normalization in preprocessing.
             self._enable_normalize = True
+            # mean = torch.as_tensor(np.load(mean))
+            # std = torch.as_tensor(np.load(std))+self.eps
+            # std_mean = torch.as_tensor(np.load(std_mean))
+            # std_std = torch.as_tensor(np.load(std_std))+self.eps
             self.register_buffer('mean',
-                                 torch.tensor(mean).view(-1, 1, 1), False)
+                                 torch.as_tensor(np.load(mean)), False)
             self.register_buffer('std',
-                                 torch.tensor(std).view(-1, 1, 1), False)
+                                 torch.as_tensor(np.load(std))+self.eps, False)
+            self.register_buffer('std_mean',
+                                 torch.as_tensor(np.load(std_mean)), False) 
+            self.register_buffer('std_std',
+                                    torch.as_tensor(np.load(std_std))+self.eps, False)
         else:
             self._enable_normalize = False
 
@@ -198,38 +169,45 @@ class IcoDataPreProcessor(BaseDataPreprocessor):
         inputs = data['inputs']
         data_samples = data.get('data_samples', None)
         inputs = [_input.float() for _input in inputs]
+        # assert self._enable_normalize  ,'To enable the normalization in '    
         if self._enable_normalize:
-            inputs = [(_input - self.mean) / self.std for _input in inputs]
-
-        if training:
-            assert data_samples is not None, ('During training, ',
-                                              '`data_samples` must be define.')
-            inputs, data_samples = ico_stack_batch(
-                inputs=inputs,
-                data_samples=data_samples,
-                size=self.size,
-                size_divisor=self.size_divisor,
-                pad_val=self.pad_val,
-                seg_pad_val=self.seg_pad_val)
-
-            if self.batch_augments is not None:
-                inputs, data_samples = self.batch_augments(
-                    inputs, data_samples)
-        else:
-            img_size = inputs[0].shape[1:]
-            assert all(input_.shape[1:] == img_size for input_ in inputs),  \
-                'The image size in a batch should be the same.'
-            # pad images when testing
-            if self.test_cfg:
-                inputs, padded_samples = ico_stack_batch(
-                    inputs=inputs,
-                    size=self.test_cfg.get('size', None),
-                    size_divisor=self.test_cfg.get('size_divisor', None),
-                    pad_val=self.pad_val,
-                    seg_pad_val=self.seg_pad_val)
-                for data_sample, pad_info in zip(data_samples, padded_samples):
-                    data_sample.set_metainfo({**pad_info})
-            else:
-                inputs = torch.stack(inputs, dim=0)
-
+            inputstmp = []
+            # _input 维度为 C,H,W 对于t2m C为22 其中 偶数维使用 mean 和std初始化 奇数维使用std_mean 和std_std初始化
+            for _input in inputs:
+                _input[::2] = (_input[::2] - self.mean) / (self.std + self.eps) 
+                _input[1::2] = (_input[1::2] - self.std_mean) / (self.std_std+ self.eps)
+                inputstmp.append(_input)
+            inputs = torch.stack(inputstmp, dim=0)
         return dict(inputs=inputs, data_samples=data_samples)
+        # if training:
+        #     assert data_samples is not None, ('During training, ',
+        #                                       '`data_samples` must be define.')
+        #     inputs, data_samples = ico_stack_batch(
+        #         inputs=inputs,
+        #         data_samples=data_samples,
+        #         size=self.size,
+        #         size_divisor=self.size_divisor,
+        #         pad_val=self.pad_val,
+        #         seg_pad_val=self.seg_pad_val)
+
+        #     if self.batch_augments is not None:
+        #         inputs, data_samples = self.batch_augments(
+        #             inputs, data_samples)
+        # else:
+        #     img_size = inputs[0].shape[1:]
+        #     assert all(input_.shape[1:] == img_size for input_ in inputs),  \
+        #         'The image size in a batch should be the same.'
+        #     # pad images when testing
+        #     if self.test_cfg:
+        #         inputs, padded_samples = ico_stack_batch(
+        #             inputs=inputs,
+        #             size=self.test_cfg.get('size', None),
+        #             size_divisor=self.test_cfg.get('size_divisor', None),
+        #             pad_val=self.pad_val,
+        #             seg_pad_val=self.seg_pad_val)
+        #         for data_sample, pad_info in zip(data_samples, padded_samples):
+        #             data_sample.set_metainfo({**pad_info})
+        #     else:
+                # inputs = torch.stack(inputs, dim=0)
+        # inputs = torch.stack(inputs, dim=0)
+        # return dict(inputs=inputs, data_samples=data_samples)

@@ -22,6 +22,11 @@ class PackIcoInputs(BaseTransform):
             'img_shape', 'pad_shape', 'scale_factor', 'flip',
             'flip_direction')``
     """
+    def __init__(self,
+                 meta_keys=('img_path', 'seg_map_path', 'ori_shape',
+                            'img_shape', 'pad_shape', 'scale_factor', 'flip',
+                            'flip_direction', 'reduce_zero_label')):
+        self.meta_keys = meta_keys
     def transform(self, results: dict) -> dict:
         """Method to pack the input data.
 
@@ -60,8 +65,8 @@ class PackIcoInputs(BaseTransform):
                               'map is 2D, but got '
                               f'{results["gt_seg_map"].shape}')
                 # data = to_tensor(results['gt_seg_map'].astype(np.int64))
-            
-            gt_sem_seg_data = dict(data=results['gt_seg_map'])
+            data = to_tensor(results['gt_seg_map'])
+            gt_sem_seg_data = dict(data=data)
             data_sample.gt_sem_seg = PixelData(**gt_sem_seg_data)
             
 
@@ -77,10 +82,10 @@ class PackIcoInputs(BaseTransform):
         # img_meta['img_path'] = results['img_path']
         img_meta['ori_shape'] =  img.shape #ico_encoder_decoder inference 中 有一步判断用到了 所以要添加上
         data_sample.set_metainfo(img_meta)
-        # for key in self.meta_keys:
-        #     if key in results:
-        #         img_meta[key] = results[key]
-        # data_sample.set_metainfo(img_meta)
+        for key in self.meta_keys:
+            if key in results:
+                img_meta[key] = results[key]
+        data_sample.set_metainfo(img_meta)
         packed_results['data_samples'] = data_sample
 
         return packed_results

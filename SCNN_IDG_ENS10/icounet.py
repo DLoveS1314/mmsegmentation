@@ -34,7 +34,7 @@ import torch.nn as nn
 from mmengine.model import constant_init, kaiming_init
 from mmengine.utils.dl_utils.parrots_wrapper import _BatchNorm, _InstanceNorm
 # from mmseg.models.utils.icoEncoderDecoder import erp2igd_encoder, idg2erp_decoder
-from .icoEncoderDecoder import erp2igd_encoder, idg2erp_decoder,encoder_v2
+from .ico2erp import  encoder_v2
 eps = 1e-5
 def fast_conv_bn_eval_forward(bn: _BatchNorm, conv: nn.modules.conv._ConvNd,
                               x: torch.Tensor):
@@ -868,9 +868,10 @@ class IcoUnet(BaseModule):
         #                                 k_size =erp2igd_dict.get('k_size'),
         #                                 dgg_kn_erp=erp2igd_dict.get('dgg_kn_erp'),
         #                                 dggrid_level=erp2igd_dict.get('dggrid_level'))
-        self.erp2igd = encoder_v2(in_channels=in_channels,out_channels=in_channels,kernel_size=erp2igd_dict.get('kernel_size'), 
-                                  dggs_type =erp2igd_dict.get('dggs_type')  , dggrid_level  = erp2igd_dict.get('dggrid_level')  ,grid_mode = erp2igd_dict.get('grid_mode')  )
-                                  
+        erp2igd_dict['in_channels'] = in_channels
+        # self.erp2igd = encoder_v3(in_channels=in_channels,out_channels=in_channels,kernel_size=erp2igd_dict.get('kernel_size'), 
+        #                           dggs_type =erp2igd_dict.get('dggs_type')  , dggrid_level  = erp2igd_dict.get('dggrid_level')  ,grid_mode = erp2igd_dict.get('grid_mode')  )
+        self.erp2igd = encoder_v2(**erp2igd_dict)                       
         # 
         for i in range(num_stages):
             enc_conv_block = []
@@ -916,7 +917,7 @@ class IcoUnet(BaseModule):
                     droprate = droprate))  
             self.encoder.append(nn.Sequential(*enc_conv_block))
             in_channels = base_channels * 2**i
-
+     
     def forward(self, x):
         x = self.erp2igd(x)
         # 先将erp转化为igd 在进行下面的操作 不然erp的维度为361 * 720 无法通过_check_input_divisible
@@ -924,12 +925,12 @@ class IcoUnet(BaseModule):
         enc_outs = []
         for enc in self.encoder:
             x = enc(x)
-            # print('encoder IcoUnet x',x.shape)
+            # print('icounet encoder IcoUnet x',x.shape)
             enc_outs.append(x)
         dec_outs = [x]
         for i in reversed(range(len(self.decoder))):
             x = self.decoder[i](enc_outs[i], x)
-            # print('decoder IcoUnet x',x.shape)
+            # print('icounet decoder IcoUnet x',x.shape)
             dec_outs.append(x)
         return dec_outs
 

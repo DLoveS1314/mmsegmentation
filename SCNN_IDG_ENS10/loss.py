@@ -6,17 +6,15 @@ import torch.nn.functional as F
 import torch
 from typing import Union 
 from mmseg.registry import MODELS
-# 导入pytorch中的l1损失
-# 
-_normal_dist = torch.distributions.Normal(0., 1.)
-_frac_sqrt_pi = 1 / np.sqrt(np.pi)
+
+
 
 
 #  losss设计的不是很好 想用pytorch的要重新继承一下 因为forward的参数不一样 decode_head的loss_by_feat 里 loss的forward需要接受其他参数 而
 @MODELS.register_module()
 class L1Loss(torch.nn.L1Loss):
     def forward(self, input , target ,**kwargs)  :
-        return F.l1_loss(input, target, reduction=self.reduction)
+        return super(input, target )
     @property
     def loss_name(self):
         """Loss Name.
@@ -62,7 +60,7 @@ class SmoothL1Loss(torch.nn.SmoothL1Loss):
         super(SmoothL1Loss, self).__init__()
         self.lam_w = lam_w
     def forward(self, input , target  ,**kwargs):
-        return self.lam_w * F.smooth_l1_loss(input, target, reduction=self.reduction)
+        return self.lam_w * super().forward(input, target )
     @property
     def loss_name(self):
         """Loss Name.
@@ -75,23 +73,24 @@ class SmoothL1Loss(torch.nn.SmoothL1Loss):
         Returns:
             str: The name of this loss item.
         """
-        return 'loss_SmoothL1'
+        return 'loss_SmL1'
 
 @MODELS.register_module()
 class MSE_VAR(nn.Module):
     # 公式 8  What Uncertainties Do We Need in Bayesian Deep Learning for Computer Vision
-    def __init__(self, var_weight):
+    def __init__(self, var_weight=1,lam_w=1):
         super(MSE_VAR, self).__init__()
         self.var_weight = var_weight
-
-    def forward(self, results, label):
-        mean, var = results['mean'], results['var']
-        var = self.var_weight * var
-
-        loss1 = torch.mul(torch.exp(-var), (mean - label) ** 2)
+        self.lam_w = lam_w
+    def forward(self,  mean: torch.Tensor,
+                logstd: torch.Tensor,  target):
+        # 根据log的性质 log(a^b) = b*log(a)   log(var) =  log(std^2) = 2*log(std)
+        var = self.var_weight * var*2
+        loss1 = torch.mul(torch.exp(-var), (mean - target) ** 2)
         loss2 = var
         loss = .5 * (loss1 + loss2)
-        return loss.mean()
+        loss = self.lam_w * loss.mean()
+        return loss 
     @property
     def loss_name(self):
         """Loss Name.
@@ -104,7 +103,7 @@ class MSE_VAR(nn.Module):
         Returns:
             str: The name of this loss item.
         """
-        return 'loss_mesvar'
+        return 'loss_msevar'
 
 @MODELS.register_module()
 class CrpsGaussianLoss(nn.Module):
@@ -117,7 +116,7 @@ class CrpsGaussianLoss(nn.Module):
 
     def __init__(self,
                  mode = 'mean',
-                 eps: Union[int, float] = 1E-15,
+                 eps: Union[int, float] = 1e-8,
                  lam_w=1):
         super(CrpsGaussianLoss, self).__init__()
 
@@ -126,23 +125,29 @@ class CrpsGaussianLoss(nn.Module):
         self.mode = mode
         self.eps = eps
         self.lam_w = lam_w
+        # 导入pytorch中的l1损失
+        # 
+        self._normal_dist = torch.distributions.Normal(0., 1.)
+        self._frac_sqrt_pi = torch.tensor(1 / np.sqrt(np.pi))
 
     def forward(self,
                 pred_mean: torch.Tensor,
                 pred_stddev: torch.Tensor,
                 target: torch.Tensor,
- 
-                
                  **kwargs):
-
+        # pred_stddev = torch.sqrt(torch.exp(pred_stddev)) 
         normed_diff = (pred_mean - target + self.eps) / (pred_stddev + self.eps)
         try:
-            cdf = _normal_dist.cdf(normed_diff)
-            pdf = _normal_dist.log_prob(normed_diff).exp()
+            cdf = self._normal_dist.cdf(normed_diff)
+            pdf = self._normal_dist.log_prob(normed_diff).exp()
         except ValueError:
-            print(normed_diff)
+            print(' ERROR CrpsGaussianLoss normed_diff',normed_diff)
+            print(' ERROR CrpsGaussianLoss normed_diff',pred_stddev)
+            print(' ERROR CrpsGaussianLoss normed_diff',target)
+            
+            
             raise ValueError
-        crps = pred_stddev * (normed_diff * (2 * cdf - 1) + 2 * pdf - _frac_sqrt_pi)
+        crps = pred_stddev * (normed_diff * (2 * cdf - 1) + 2 * pdf - self._frac_sqrt_pi)
  
         if self.mode == 'mean':
             crps = torch.mean(crps)
@@ -177,7 +182,8 @@ class EECRPSGaussianLoss(nn.Module):
 
         self.mode = mode
         self.eps = eps
-
+        self._normal_dist = torch.distributions.Normal(0., 1.)
+        self._frac_sqrt_pi = torch.tensor(1 / np.sqrt(np.pi))
     def forward(self,
                 pred_mean: torch.Tensor,
                 pred_stddev: torch.Tensor,
@@ -186,12 +192,12 @@ class EECRPSGaussianLoss(nn.Module):
 
         normed_diff = (pred_mean - target + self.eps) / (pred_stddev + self.eps)
         try:
-            cdf = _normal_dist.cdf(normed_diff)
-            pdf = _normal_dist.log_prob(normed_diff).exp()
+            cdf = self._normal_dist.cdf(normed_diff)
+            pdf = self._normal_dist.log_prob(normed_diff).exp()
         except ValueError:
             print(normed_diff)
             raise ValueError
-        crps = torch.abs(efi_tensor) * pred_stddev * (normed_diff * (2 * cdf - 1) + 2 * pdf - _frac_sqrt_pi)
+        crps = torch.abs(efi_tensor) * pred_stddev * (normed_diff * (2 * cdf - 1) + 2 * pdf - self._frac_sqrt_pi)
 
         if self.mode == 'mean':
             return torch.mean(crps)

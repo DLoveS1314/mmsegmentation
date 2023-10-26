@@ -7,6 +7,8 @@ from tqdm import tqdm
 import shutil
 import json
 from SCNN_IDG_ENS10.Dataset_old1 import  ENS10GridDataset
+
+
 import numpy as np
 from mmseg.structures import SegDataSample
 # 摘抄自prepare_dggrid_data.ipynb 他的那个里面是错误的
@@ -100,6 +102,24 @@ def creatann2json(data_root,label_root,ann_path, variables):
         else:#test
             data_list_test.append(file)
             label_list_test.append(file.replace('img','label').replace('_','label_'))
+    # 把data_list_train 和label_list_train 放到train.txt
+    # 创建 train.txt 文件并将数据写入
+    with open('train.txt', 'w') as file:
+        for img_path, label_path in zip(data_list_train, label_list_train):
+            # 将图像路径和标签路径写入文件，用空格分隔
+            file.write(f'{img_path} {label_path}\n')
+            
+    # 把data_list_test 和label_list_test 放到test.txt
+    with open('test.txt', 'w') as file:
+        for img_path, label_path in zip(data_list_test, label_list_test):
+            # 将图像路径和标签路径写入文件，用空格分隔
+            file.write(f'{img_path} {label_path}\n')
+
+    # 把data_list_val 和label_list_val 放到val.txt
+    with  open('val.txt', 'w') as file:
+        for img_path, label_path in zip(data_list_val, label_list_val):
+            # 将图像路径和标签路径写入文件，用空格分隔
+            file.write(f'{img_path} {label_path}\n')
     print('训练集的文件个数{}'.format(len(data_list_train)))
     print('训练集的标签个数{}'.format(len(label_list_train)))   
     print('测试集的文件个数{}'.format(len(data_list_test)))
@@ -187,9 +207,12 @@ def creat_json():
     """    
 
     # 按照文件结构 循环创建t2m、t850、z500数据集的json文件
-    root = '/media/dls/WeatherData/ENS10/data'
+    # root = '/media/dls/WeatherData/ENS10/data'
+    root = '/home/dls/Desktop'
     outroot = '/home/dls/data/openmmlab/letter2/mmsegmentation/SCNN_IDG_ENS10/data'
-    for var in ["t2m", "t850", "z500"]:
+    # for var in ["t2m", "t850", "z500"]:
+    for var in ["t2m" ]:
+        
         # 数据集根目录
         data_root = os.path.join(root, var,'img')
         # 标签根目录
@@ -239,7 +262,42 @@ def getdatafromnc():
                 # np.save(outimgname,img)
                 np.save(outlabelname,label)
                 bar.set_description("Processing {}".format(var+'_'+time+'.npy'))
+
  
+def get_outvar_mean_std():
+    data_path = '/media/dls/WeatherData/ENS10/meanstd/'
+    target_vars = ['t850','z500','t2m' ]
+    dataset_type = ['train','val','test']
+    out_dir = '/media/dls/WeatherData/ENS10/data/outvarmeanstd'
+    for var in target_vars:
+        for dat_tpye in dataset_type:
+            # 读取数据
+            data = ENS10GridDataset(data_path=data_path,target_var = var,return_time=True,dataset_type=dat_tpye,normalized=False)
+            bar = tqdm(range(len(data)))
+            for i in  bar:
+                packed_results = data[i]
+                # img = packed_results['inputs']
+  
+                mean = packed_results['scale_mean']
+                std = packed_results['scale_std']
+                time = packed_results['time']
+                # 把时间字符串转化为年份+月份+日期的形式 1997-12-02--->19971202
+                time = time.split('-')
+                time = ''.join(time)
+                # bar.set_postfix(time=time)
+                # outimgname = os.path.join(out_dir,var,'img',var+'_'+time+'.npy')
+                outvar_mean_name = os.path.join(out_dir,var,f'outvarmeanstd',var+'outvarm_'+time+'.npy')
+                outvar_std_name = os.path.join(out_dir,var,f'outvarmeanstd',var+'outvars_'+time+'.npy')
+                
+                # os.makedirs(os.path.dirname(outimgname),exist_ok=True)
+                os.makedirs(os.path.dirname(outvar_mean_name),exist_ok=True)
+                # 保存数据
+                # np.save(outimgname,img)
+                np.save(outvar_mean_name,mean)
+                np.save(outvar_std_name,std)
+                
+                bar.set_description(" outvar  {}".format(var+'_'+time+'.npy'))
 if __name__ == "__main__":
-   getdatafromnc()
+#    getdatafromnc()
     # creat_json()
+    get_outvar_mean_std()

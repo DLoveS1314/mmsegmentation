@@ -7,7 +7,7 @@ from mmseg.utils import SampleList
 from .icounet import IcoConvModule,icopad_conv2d
 from mmseg.registry import MODELS
 from mmseg.models  import FCNHead 
-from .icoEncoderDecoder  import idg2erp_decoder
+from .ico2erp  import  decoder_v2
 from mmseg.models.decode_heads.decode_head import BaseDecodeHead
 import warnings
 from abc import ABCMeta, abstractmethod
@@ -29,7 +29,7 @@ class IcoFCNHead(BaseModule):
                  separate =False,#均值和方差是否分开卷积
                  inter_times =1 ,
                  #插值次数  只在separate =True 时有效 1代表均值和方差分开卷积之后 进行相同模块的插值 2代表均值和方差分开卷积之后 进行不同模块的插值
-                 erp2igd_dict =dict(k_size=9, delta=0.5,rootpath='./index_table',dggrid_level=7,p=0,dggird_type='FULLER4D'),
+                 idg2erp_dict =None,
                  conv_cfg  = dict(type = 'Conv2d'),
                  norm_cfg  =dict(type = 'BN2d'),
                  act_cfg=dict(type='Swish'),
@@ -89,11 +89,14 @@ class IcoFCNHead(BaseModule):
                 kernel_size=kernel_size,
                 dilation=dilation,
             )
-            if inter_times == 1 :
-                erp2igd_dict['in_channels'] =self.out_channels//2
-                self.idg2erp_mean =  idg2erp_decoder(**erp2igd_dict)
-                self.idg2erp_std =  idg2erp_decoder(**erp2igd_dict)
-
+            if inter_times != 1 :
+                idg2erp_dict['in_channels'] =self.out_channels//2
+                self.idg2erp_mean =  decoder_v2(**idg2erp_dict)
+                self.idg2erp_std =  decoder_v2(**idg2erp_dict)
+            else:
+                # 如果不插值两次 则通道数均为2 如果不分开卷积 通道数也为2
+                idg2erp_dict['in_channels'] =self.out_channels
+                self.idg2erp =  decoder_v2(**idg2erp_dict)
         else:
             self.convs = self.create_convs(
                 out_channels=self.out_channels,
@@ -101,9 +104,10 @@ class IcoFCNHead(BaseModule):
                 kernel_size=kernel_size,
                 dilation=dilation,
             )
-        # 如果不插值两次 则通道数均为2 如果不分开卷积 通道数也为2
-        erp2igd_dict['in_channels'] =self.out_channels
-        self.idg2erp =  idg2erp_decoder(**erp2igd_dict)
+            # 如果不插值两次 则通道数均为2 如果不分开卷积 通道数也为2
+            idg2erp_dict['in_channels'] =self.out_channels
+            self.idg2erp =  decoder_v2(**idg2erp_dict)
+  
     def create_convs(self, out_channels, num_convs, kernel_size,
                      dilation):
         """Create conv layers used in FCNHead.创建过程中包含了最后一层的回归"""
@@ -141,7 +145,7 @@ class IcoFCNHead(BaseModule):
         #         act_cfg=self.act_cfg)
         #     convs.append(self.conv_cat)
         reg_seg = icopad_conv2d(
-            self.channels, out_channels, kernel_size=3, padding=0) #最后一层对结果进行回归
+            self.channels, out_channels, kernel_size=3, padding=1) #最后一层对结果进行回归
         convs.append(reg_seg)
         convs = nn.Sequential(*convs)
         
@@ -175,7 +179,7 @@ class IcoFCNHead(BaseModule):
                 H, W) which is feature map for last layer of decoder head.
         """
         x = self._transform_inputs(inputs)
-        # print('IcoFCNHead x.shape',x.shape)
+        # print('IcoFCNHead  _forward_feature x.shape',x.shape)
         if self.seprate:#均值和方差是否分开卷积
             feats_mean = self.conv_mean(x) #回归也各自进行
             feats_std = self.conv_std(x)
@@ -191,6 +195,7 @@ class IcoFCNHead(BaseModule):
             feats = self.convs(x)
         # if self.concat_input: #不使用这个模块
         #     feats = self.conv_cat(torch.cat([x, feats], dim=1))
+        # print('IcoFCNHead  _forward_feature feats.shape',feats.shape)
 
         return feats
 
@@ -243,10 +248,17 @@ class IcoFCNHead(BaseModule):
         return self.predict_by_feat(seg_logits, batch_img_metas)
 
     def _stack_batch_gt(self, batch_data_samples: SampleList) -> Tensor:
-        gt_semantic_segs = [
-            data_sample.gt_sem_seg.data for data_sample in batch_data_samples
-        ]
-        return torch.stack(gt_semantic_segs, dim=0)
+        gt_semantic_segs = []
+        out_means =[]
+        out_stds =[]
+        for data_sample in batch_data_samples:
+            gt_semantic_segs.append(data_sample.gt_sem_seg.data)  
+            out_means.append(data_sample.metainfo['out_mean'])
+            out_stds.append(data_sample.metainfo['out_std'])
+        gt_semantic_segs = torch.stack(gt_semantic_segs, dim=0)
+        out_means = torch.stack(out_means, dim=0)
+        out_stds = torch.stack(out_stds, dim=0)
+        return  gt_semantic_segs ,out_means,out_stds
 
     def loss_by_feat(self, seg_logits: Tensor,
                      batch_data_samples: SampleList) -> dict:
@@ -262,7 +274,7 @@ class IcoFCNHead(BaseModule):
             dict[str, Tensor]: a dictionary of loss components
         """
         # seg_logits B,C,H,W 第一个通道是均值 第二个通道是方差
-        seg_label = self._stack_batch_gt(batch_data_samples)
+        seg_label,out_means,out_stds = self._stack_batch_gt(batch_data_samples)
         loss = dict()
         # seg_logits = resize(
         #     input=seg_logits,
@@ -273,8 +285,12 @@ class IcoFCNHead(BaseModule):
         #     seg_weight = self.sampler.sample(seg_logits, seg_label)
         # else:
         #     seg_weight = None
-        seg_label = seg_label.squeeze(1)
-
+        seg_label = seg_label.squeeze(1) #把通道数又去掉了 那么在数据处理的时候专门加上通道数为了什么？？？
+        pred_mean = seg_logits[:, 0] * out_means + out_stds
+        pred_stddev = torch.exp(seg_logits[:, 1]) * out_stds
+        if 'msevar'in  loss_decode.loss_name :
+            logstd = seg_logits[:, 1] 
+        
         if not isinstance(self.loss_decode, nn.ModuleList):
             losses_decode = [self.loss_decode]
         else:
@@ -282,10 +298,13 @@ class IcoFCNHead(BaseModule):
         for loss_decode in losses_decode:#本文一共有两个loss 一个是mse类别的loss 一个是crps组成的loss
             if 'crps' in  loss_decode.loss_name :
                 loss[loss_decode.loss_name] = loss_decode(
-                    pred_mean=seg_logits[:,0], pred_stddev=seg_logits[:,1],target=seg_label)
+                    pred_mean=pred_mean, pred_stddev=pred_stddev,target=seg_label)
+            elif 'msevar'in  loss_decode.loss_name :
+                 loss[loss_decode.loss_name] = loss_decode(
+                    mean=pred_mean,logstd=logstd,  target=seg_label )  
             else:
                 loss[loss_decode.loss_name] = loss_decode(
-                    seg_logits[:,0], seg_label)
+                    pred_mean, seg_label) 
         # loss['acc_seg'] = accuracy(
         #     seg_logits, seg_label, ignore_index=self.ignore_index)
         return loss

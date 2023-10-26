@@ -42,6 +42,10 @@ class ENS10Dataset(BaseDataset):
     """
 
     def __init__(self,
+                 target_var, 
+                 #输入目标输出的变量名 确定 target_mean 和 target_std 为了与ENS10代码中最后的计算一致            
+                 # mu = output[:, 0] * scale_std + scale_mean
+                 #sigma = torch.exp(output[:, 1]) * scale_std
                  ann_file: str = '',
                  metainfo: Optional[dict] = None,
                  data_root: str = '',
@@ -67,7 +71,18 @@ class ENS10Dataset(BaseDataset):
             lazy_init=lazy_init,
             max_refetch=max_refetch)
         # # 创建一个PackIcoInputs的实例 在基类中自动创建
-        
+        assert target_var in ['t2m','t850','z500'] , 'target_var must be in t2m,t850,z500 but got {}'.format(target_var)
+        if target_var == "t850":#确定target_mean在输入中的位置 见exp.ipynb 中的测试
+            # self.variables = ["Z", "T", "Q", "W", "D", "U", "V"]
+            #self.variables = ['SSTK', 'TCW', 'TCWV', 'CP', 'MSL', 'TCC', 'U10M', 'V10M', 'T2M', 'TP', 'SKT']
+            self.target_mean_index = 2
+            self.target_std_index = 3
+        elif target_var == "t2m":
+            self.target_mean_index = 16
+            self.target_std_index = 17
+        else :#'z500'
+            self.target_mean_index = 0
+            self.target_std_index = 1
         # self.pipeline = PackIcoInputs()
     # def __len__(self): 基类自动实现
     #     return self.length
@@ -81,11 +96,13 @@ class ENS10Dataset(BaseDataset):
     def loadImageFromFile(self,data_info):
         # 从 data_info里读取数据和标签
         filename = data_info['img_path']
-        print('loadImageFromFile',filename)
+        # print('loadImageFromFile',filename)
         data_info['img'] = np.load(filename)
-        print('loadImageFromFile gt_seg_map',data_info['gt_seg_map'])
+        # print('loadImageFromFile gt_seg_map',data_info['gt_seg_map'])
         
         data_info['gt_seg_map'] = np.load(data_info['gt_seg_map'] )
+        data_info['out_mean'] = data_info['img'][self.target_mean_index].copy() #防止'img'在后续被改变后，'out_mean'也跟着改变
+        data_info['out_std'] = data_info['img'][self.target_std_index].copy()
         # rgb数据[0~255]  这样在数据搬运过程中很快 DataPreprocessor 搬运完成在归一化 相当于搬运的是uint 而不是float
         #  https://mmengine.readthedocs.io/zh_CN/latest/tutorials/model.html
     def prepare_data(self, idx) -> Any:

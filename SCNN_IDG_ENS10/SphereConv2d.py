@@ -53,7 +53,8 @@ class SphereConv2d_icopoint(nn.Module):
                groups: int = 1, bias: bool = True, padding_mode: str = 'zeros',
                dggs_type = "FULLER4D",
                res = 6,
-               grid_mode = "bilinear" 
+               grid_mode = "bilinear" ,
+               usesa = True
                ):
     super(SphereConv2d_icopoint, self).__init__()
     
@@ -64,7 +65,8 @@ class SphereConv2d_icopoint(nn.Module):
     self.kernel_size = kernel_size
     self.depthConv = nn.Conv2d(in_channels, in_channels, kernel_size ,groups=groups, bias=bias,stride=stride) ##相当于插值了
     self.pointConv = nn.Conv2d(in_channels, out_channels, 1, 1, 0, 1, 1, bias, padding_mode) #相当于提高二十面体的维度
-    self.sa = SpatialAttentionModule()
+    
+    self.sa = SpatialAttentionModule() if usesa else nn.Identity()
     self.grid_mode = grid_mode
     # 新添加的球面格网的数据参数
     self.dggs_type = dggs_type
@@ -93,11 +95,11 @@ class SphereConv2d_icopoint(nn.Module):
       self.genSamplingPattern_ico(H, W)
 
     with torch.no_grad():
-      grid = self.grid.repeat((B, 1, 1, 1)).to(x.device)  # (B, H*Kh, W*Kw, 2)
+      grid = self.grid.repeat((B, 1, 1, 1)).to(x.device)  # (B, H*Kh, W*Kw, 2) => (B, L*Kh, Kw, 2)
       grid.requires_grad = False
     # print('grid.shape',grid.shape)
     
-    out = F.grid_sample(x, grid, align_corners=False, mode=self.grid_mode)  # (B, in_c, H*Kh, W*Kw)
+    out = F.grid_sample(x, grid, align_corners=False, mode=self.grid_mode)  # (B, in_c, H*Kh, W*Kw) =>(B, L*Kh, Kw, 2)
     # print('x.shape',x.shape)
     # self.weight -> (out_c, in_c, Kh, Kw)
     # x = F.conv2d(x, self.weight, self.bias, stride=self.kernel_size,padding=0,groups=self.groups) # padding=0
